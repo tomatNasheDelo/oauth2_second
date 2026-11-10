@@ -1,0 +1,47 @@
+{
+  "realm": "learning",
+  "enabled": true,
+  "displayName": "OAuth2 learning realm",
+  "roles": {
+    "realm": [
+      { "name": "user", "description": "Can call user API endpoints" },
+      { "name": "admin", "description": "Can call admin API endpoints" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "demo-client",
+      "name": "Spring OAuth2 Client demo",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "demo-client-secret-change-me",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:8080/login/oauth2/code/keycloak"],
+      "webOrigins": ["http://localhost:8080"],
+      "defaultClientScopes": ["profile", "email", "roles", "web-origins"]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Learner",
+      "credentials": [{ "type": "password", "value": "alice-local-only", "temporary": false }],
+      "realmRoles": ["user"]
+    },
+    {
+      "username": "bob-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Admin",
+      "credentials": [{ "type": "password", "value": "bob-local-only", "temporary": false }],
+      "realmRoles": ["user", "admin"]
+    }
+  ]
+}

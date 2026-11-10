@@ -1,0 +1,147 @@
+Подробное руководство: OAuth2 Client и JWT Resource Server
+==========================================================
+
+Что изучаем
+-----------
+
+Два независимых Spring Boot приложения и Keycloak для локальной выдачи токенов. Это демонстрирует две разные роли OAuth2:
+
+1. OAuth2 Client начинает Authorization Code flow, получает access token и вызывает другое приложение от имени пользователя.
+2. OAuth2 Resource Server принимает bearer token, проверяет JWT подпись и issuer, читает claims и решает, разрешать ли доступ.
+
+Здесь GitHub OAuth из предыдущего демо заменён локальным Keycloak: GitHub OAuth access tokens не следует считать JWT и нельзя без проверки использовать как токены для собственного Resource Server. Keycloak выдаёт JWT, понятный нашей Resource Server.
+
+Элементы проекта
+----------------
+
+- `client-app/` — порт 8080, Spring Security OAuth2 Client, browser Authorization Code login. Сохраняет авторизованного пользователя и authorized client в HTTP session; endpoint `/api/call-resource` пересылает access token в API.
+- `resource-server/` — порт 8081, Spring Security OAuth2 Resource Server. Проверяет JWT относительно `issuer-uri`, использует роли из Keycloak claim `realm_access.roles`.
+- `keycloak/realm-learning.json` — учебный realm, клиент `demo-client` и пользователи для локального эксперимента.
+- `compose.yaml` — запускает Keycloak; оба Spring приложения выполняются на хосте.
+- `build.gradle.kts`, `settings.gradle.kts` — Gradle Kotlin DSL multi-project build, Java 17.
+
+Требования
+----------
+
+- JDK 17+
+- Gradle 8.x
+- Docker с Compose plugin
+- Свободные порты 8080, 8081 и 8180
+
+Шаг 1: запустить Keycloak
+-------------------------
+
+Из корня репозитория:
+
+```bash
+docker compose up -d
+```
+
+Keycloak импортирует realm из `keycloak/realm-learning.json` при первом запуске. Дождись готовности и проверь:
+
+```bash
+docker compose logs -f keycloak
+curl http://localhost:8180/realms/learning/.well-known/openid-configuration
+```
+
+Admin console: http://localhost:8180 (username `admin`, password `admin-local-only`, только локальный демо пароль).
+
+Шаг 2: запустить Resource Server
+--------------------------------
+
+В терминале 1 из корня:
+
+```bash
+gradle :resource-server:bootRun
+```
+
+Public endpoint:
+
+```bash
+curl http://localhost:8081/api/public
+```
+
+Без токена защищённый endpoint вернёт 401:
+
+```bash
+curl -i http://localhost:8081/api/user/me
+```
+
+Шаг 3: запустить OAuth2 Client
+------------------------------
+
+В терминале 2 из корня:
+
+```bash
+gradle :client-app:bootRun
+```
+
+Открой в браузере:
+
+```text
+http://localhost:8080/oauth2/authorization/keycloak
+```
+
+Войди `alice` / `alice-local-only`. После возврата от Keycloak client-app выдаст JSON о входе. Используй ту же браузерную сессию:
+
+- `http://localhost:8080/api/me` — claims профиля в клиентском приложении.
+- `http://localhost:8080/api/call-resource` — client-app передаст полученный JWT Resource Server и вернёт его ответ.
+
+Для проверки администратора выйди через `POST /logout` с CSRF token либо используй приватное окно, затем войди как `bob-admin` / `bob-local-only`.
+
+Проверка токена и разграничения ролей через curl
+------------------------------------------------
+
+Realm включает учебный Direct Access Grant, чтобы получить токен командами. В production этот grant обычно не рекомендуют; здесь он только для учебного curl walkthrough.
+
+Linux/macOS (нужен `jq`):
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8180/realms/learning/protocol/openid-connect/token \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'client_id=demo-client' \
+  -d 'client_secret=demo-client-secret-change-me' \
+  -d 'grant_type=password' \
+  -d 'username=alice' \
+  -d 'password=alice-local-only' | jq -r .access_token)
+curl -i -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/user/me
+curl -i -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/admin/hello
+```
+
+Alice имеет только `user`: первый запрос успешен, второй должен вернуть 403. Повтори получение токена с `username=bob-admin` и `password=bob-local-only`; admin endpoint вернёт 200.
+
+Остановить Keycloak:
+
+```bash
+docker compose down
+```
+
+Не используй `docker compose down -v`, если хочешь сохранить локальное состояние Keycloak; realm импортируется при создании контейнера, а не переимпортируется поверх уже существующего realm при каждом старте.
+
+REST API и роли
+---------------
+
+Resource Server:
+
+- `GET /api/public` — публичный endpoint.
+- `GET /api/user/me` — требует валидный JWT.
+- `GET /api/admin/hello` — требует JWT с realm role `admin`.
+
+Client app:
+
+- `GET /` — подсказки для запуска.
+- `GET /oauth2/authorization/keycloak` — начинает login redirect.
+- `GET /api/me` — показывает сведения OAuth principal.
+- `GET /api/call-resource` — вызывает защищённый endpoint с токеном текущей сессии.
+
+Важно о секретах и доверии
+-------------------------
+
+Все пароли и client secret в realm JSON — известные локальные demo credentials, не пригодные для production. Не публикуй в этом realm настоящие данные. Resource Server доверяет issuer Keycloak и проверяет JWT-подпись через discovery/JWK; никогда не отключай проверку подписи и не принимай токен только потому, что он похож на JWT. HTTPS и строгие настройки клиентов обязательны в настоящем приложении.
+
+Разница ролей
+-------------
+
+- **OAuth2 Client** — получает/сохраняет токен и предъявляет его при вызове API. В проекте это `client-app`.
+- **OAuth2 Resource Server** — проверяет входящий bearer token и защищает ресурсы по claims/roles. В проекте это `resource-server`.
+- Keycloak — Authorization Server / OpenID Provider, выдаёт токены. Он не является ни client-app, ни нашим API.
